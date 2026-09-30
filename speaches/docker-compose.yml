@@ -1,0 +1,33 @@
+# Speaches (faster-whisper) speech-to-text API, CPU build.
+name: speaches   # fixed project name: keeps using container "speaches" and volume speaches_hf-hub-cache wherever this file lives
+# OpenAI-compatible endpoint: POST http://localhost:8010/v1/audio/transcriptions
+# From n8n (separate container): http://host.docker.internal:8010/v1/audio/transcriptions
+services:
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:0.8.3-cpu   # pinned; bump deliberately
+    container_name: speaches
+    restart: unless-stopped
+    ports:
+      - "8010:8000"                                # host 8000 is used by lightrag atlas-api
+    environment:
+      LOG_LEVEL: info
+      LOOPBACK_HOST_URL: http://localhost:8000     # UI calls the API from inside the container, where it listens on 8000 (not the host's 8010)
+      WHISPER__INFERENCE_DEVICE: cpu
+      WHISPER__COMPUTE_TYPE: int8                  # fastest on CPU, minimal accuracy loss
+      WHISPER__CPU_THREADS: "8"                    # Ryzen AI 7 350: 8 cores / 16 threads
+      WHISPER__TTL: "-1"                           # keep model loaded; no cold-start per request
+    volumes:
+      - hf-hub-cache:/home/ubuntu/.cache/huggingface/hub
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://0.0.0.0:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+
+volumes:
+  hf-hub-cache:

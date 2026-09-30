@@ -1,0 +1,61 @@
+{
+ "name": "prabowo",
+ "source": "PRESIDEN PRABOWO Kadang-kadang Saya Kalau Bicara di Audiens Suka Dipelintir.mp3",
+ "audio_seconds": 98.5,
+ "windows_total": 50,
+ "windows_used": 49,
+ "cluster_thr": 0.5,
+ "member_sim_min": 0.555,
+ "member_sim_median": 0.787,
+ "outlier_windows": [
+  [
+   11.7,
+   14.7,
+   0.375
+  ]
+ ],
+ "segments": [
+  {
+   "start": 0.7,
+   "end": 10.1,
+   "sim": 0.75,
+   "text": "Jadi saudara-saudara jangan salah ya menerima, kadang-kadang saya kalau bicara di audience, suka di perintir ya, dibilang bahwa seolah-olah saya enggak hormati pakar."
+  },
+  {
+   "start": 10.2,
+   "end": 21.3,
+   "sim": 0.703,
+   "text": "Saya paling hormat sama pakar, enggak bisa. Apapun saya, kenapa saya berhasil sebagai perwira, karena saya selalu cari pakar."
+  },
+  {
+   "start": 21.9,
+   "end": 32.0,
+   "sim": 0.773,
+   "text": "Anyway, jadi mohon saya diberi masukan. What can we do supaya tahun depan kita, sudah lah."
+  },
+  {
+   "start": 32.0,
+   "end": 50.2,
+   "sim": 0.764,
+   "text": "Jadi sekarang saya sudah perintahkan, sudah lah kita antisipasi, jadi ternyata tadi saya ada pelaporan kemarin ya, dengan segala macam helikopter apa, tetap yang paling efektif adalah petugas di darat."
+  },
+  {
+   "start": 51.0,
+   "end": 60.1,
+   "sim": 0.801,
+   "text": "Jadi bagaimana saya minta masukan dari saudara-saudara, what we have to do. Soal mitigasi fisik, kita lakukan."
+  },
+  {
+   "start": 60.1,
+   "end": 73.9,
+   "sim": 0.756,
+   "text": "Kalau ada kebakaran harus siap, enggak ada jauh sebelum kebakaran, bikin embung-embung-embung, belum ada kebakaran, bikin pompa-pompa-pompa, siapkan semua itu."
+  },
+  {
+   "start": 77.0,
+   "end": 84.0,
+   "sim": 0.793,
+   "text": "Nah, tapi dengan gambut, kalau bisa, ada jawaban ilmiah."
+  }
+ ]
+}

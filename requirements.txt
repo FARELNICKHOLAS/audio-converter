@@ -1,0 +1,3 @@
+requests
+openpyxl
+yt-dlp  # fallback downloader in fetch_videos.py, used when media_url fails

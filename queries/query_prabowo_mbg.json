@@ -1,0 +1,12 @@
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "simple_query_string": { "query": "Prabowo + MBG", "fields": ["content"] } },
+        { "range": { "created_at": { "gte": "28-09-2026", "lte": "29-09-2026", "format": "dd-MM-yyyy" } } },
+        { "term": { "media_type": { "value": "video" } } }
+      ]
+    }
+  },
+  "sort": [{ "created_at": "desc" }]
+}
