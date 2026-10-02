@@ -32,7 +32,7 @@ STATUS_ORDER = {"done": 0, "suspect_hallucination": 1, "no_speech": 2, "no_audio
 STATUS_INFO = {
     "done": "Ada ucapan, transkrip terisi",
     "suspect_hallucination": "Whisper mengarang frasa umum (mis. 'Terima kasih.') pada klip tanpa ucapan",
-    "no_speech": "Hanya musik / hening",
+    "no_speech": "Hanya musik / hening (dari Whisper, atau Silero VAD < 1 detik ucapan sehingga Whisper tidak dipanggil)",
     "no_audio": "File video tanpa track audio",
     "failed": "Error saat transkripsi",
 }

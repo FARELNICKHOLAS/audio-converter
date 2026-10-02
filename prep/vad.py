@@ -1,14 +1,20 @@
-"""Silero VAD on the original audio (no Demucs): silence everything outside detected speech.
+"""Silero VAD on the original audio (no Demucs).
 
-For every video with an audio track in <src>/manifest.jsonl this writes a 16 kHz mono WAV on
-the original timeline, so transcript timestamps still match the video:
+Without --out (pipeline gate): per-video VAD stats go to <src>/vad.jsonl and no audio is written.
+transcribe.py reads that file and marks videos with almost no Silero speech as no_speech without
+calling Whisper.
+
+With --out (experiment): for every video with an audio track in <src>/manifest.jsonl this also
+writes a 16 kHz mono WAV on the original timeline, so transcript timestamps still match the video:
   <out>/silero/<name>.wav   original mix, silenced outside Silero VAD speech
-The folder gets a manifest.jsonl pointing at its WAVs (same layout as prep.py), and per-video
-VAD stats go to <out>/silero/vad.jsonl. Videos already in vad.jsonl are skipped.
+The folder gets a manifest.jsonl pointing at its WAVs (same layout as prep.py), and the stats go
+to <out>/silero/vad.jsonl.
+
+Videos already in vad.jsonl are skipped.
 
 Runs in the audio-prep:local image (see Dockerfile):
   docker run --rm -v "C:\\Users\\wayan\\Downloads:/data" -v "D:\\audio-converter\\prep:/prep:ro" -v spk-cache:/cache
-         audio-prep:local python /prep/vad.py --src /data/<batch> --out /data/<experiment>
+         audio-prep:local python /prep/vad.py --src /data/<batch> [--out /data/<experiment>]
 """
 import argparse
 import json
@@ -26,11 +32,13 @@ from prep import SR, VAD, decode, write_wav
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", required=True)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", help="experiment folder for silenced WAVs; omit to only write <src>/vad.jsonl")
     a = ap.parse_args()
-    src, out = pathlib.Path(a.src), pathlib.Path(a.out) / "silero"
-    out.mkdir(parents=True, exist_ok=True)
-    stats_path = out / "vad.jsonl"
+    src = pathlib.Path(a.src)
+    out = pathlib.Path(a.out) / "silero" if a.out else None
+    if out:
+        out.mkdir(parents=True, exist_ok=True)
+    stats_path = (out or src) / "vad.jsonl"
     done = {json.loads(l)["_id"] for l in stats_path.read_text(encoding="utf-8").splitlines() if l} if stats_path.exists() else set()
     docs = {}
     for line in (src / "manifest.jsonl").read_text(encoding="utf-8").splitlines():
@@ -58,12 +66,16 @@ def main():
                 rec["audio_seconds"] = round(len(x) / SR, 1)
                 rec["vad_speech_seconds"] = round(float(mask.sum() / SR), 1)
                 rec["vad_spans"] = [[round(s["start"], 2), round(s["end"], 2)] for s in spans]
-                write_wav(out / (pathlib.Path(d["file"]).stem + ".wav"), x * mask)
+                if out:
+                    write_wav(out / (pathlib.Path(d["file"]).stem + ".wav"), x * mask)
                 rec["status"] = "ok"
             stats.write(json.dumps(rec, ensure_ascii=False) + "\n")
             stats.flush()
             print(f"[{n:2}/{len(docs)}] {d['_id'][:24]:24} {rec['status']:8} audio={rec.get('audio_seconds', 0):6}s "
                   f"vad={rec.get('vad_seconds', 0):5}s speech={rec.get('vad_speech_seconds', 0)}s", flush=True)
+    if not out:
+        print(f"-> {stats_path}")
+        return
     recs = {r["_id"]: r for r in (json.loads(l) for l in stats_path.read_text(encoding="utf-8").splitlines() if l)}
     with open(out / "manifest.jsonl", "w", encoding="utf-8") as m:
         for doc in docs.values():

@@ -13,6 +13,11 @@ but it can also leak into the output. When a prompted result has a repetition lo
 a prompt copy, the video is transcribed again without the prompt and that result is kept
 ("prompt_fallback": true).
 
+Silero VAD gate: when the folder has a vad.jsonl from prep/vad.py, videos with less than
+GATE_SECONDS of Silero speech are marked no_speech without calling Whisper, so Whisper gets no
+chance to invent "Terima kasih." on music. The audio sent to Whisper is unchanged. Without
+vad.jsonl (or with --no-vad-gate) every video with an audio track goes to Whisper.
+
 Usage:
   python transcribe.py --dir "C:/Users/wayan/Downloads/socmed-prabowo-mbg-20260929"
 """
@@ -35,6 +40,10 @@ HALLUCINATIONS = {"terima kasih", "terima kasih.", "terima kasih telah menonton"
                   "sampai jumpa", "thank you.", "thanks for watching!", "you"}
 # Hallucination reasons that mean the prompt leaked into the output.
 LEAKS = {"berulang", "salinan_prompt"}
+# Silero VAD gate. On batch 20260929 it skipped Whisper for 10 of 33 videos with audio (Silero
+# speech 0.0-0.8 s): 6 were no_speech without the gate and 4 were suspect_hallucination with only
+# "Terima kasih.". The other 23 kept identical text. The next lowest video had 2.0 s of speech.
+GATE_SECONDS = 1.0
 
 
 def load_manifest(folder):
@@ -44,6 +53,14 @@ def load_manifest(folder):
         if rec.get("file"):
             docs[rec["_id"]] = rec  # last record per _id wins
     return docs
+
+
+def load_vad(folder):
+    """Silero VAD stats per _id from prep/vad.py, or {} when the folder has none."""
+    path = folder / "vad.jsonl"
+    if not path.exists():
+        return {}
+    return {r["_id"]: r for r in (json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l)}
 
 
 def has_audio_track(path):
@@ -148,6 +165,7 @@ def main():
     ap.add_argument("--reclassify", action="store_true", help="re-clean and recompute status from saved segments, no transcription")
     ap.add_argument("--prompt", default=PROMPT, help='spelling-hint prompt; "" = none')
     ap.add_argument("--out-name", default="transcripts.jsonl")
+    ap.add_argument("--no-vad-gate", action="store_true", help="ignore vad.jsonl; send every video with audio to Whisper")
     a = ap.parse_args()
     folder = pathlib.Path(a.dir)
     out_path = folder / a.out_name
@@ -165,14 +183,26 @@ def main():
 
     docs = [d for d in load_manifest(folder).values() if d["_id"] not in done]
     print(f"{len(docs)} to transcribe ({len(done)} already done)")
+    vad = {} if a.no_vad_gate else load_vad(folder)
+    if vad:
+        missing = sum(d["_id"] not in vad for d in docs)
+        print(f"Silero gate on (< {GATE_SECONDS}s speech = no_speech)"
+              + (f", {missing} videos not in vad.jsonl go to Whisper" if missing else ""))
+    else:
+        print("Silero gate off" + ("" if a.no_vad_gate else " (no vad.jsonl; run prep/vad.py first)"))
     t_all = time.time()
     with open(out_path, "a", encoding="utf-8") as out:
         for i, d in enumerate(docs, 1):
             t0 = time.time()
             rec = {k: d.get(k) for k in ("_id", "_index", "platform", "link", "created_at", "lang", "content")}
+            v = vad.get(d["_id"], {})
+            if v.get("status") == "ok":
+                rec["vad_speech_seconds"] = v["vad_speech_seconds"]
             try:
                 if not has_audio_track(folder / d["file"]):
                     rec["transcript_status"] = "no_audio"
+                elif v.get("status") == "ok" and v["vad_speech_seconds"] < GATE_SECONDS:
+                    rec |= {"transcript_status": "no_speech", "vad_gate": True}  # Whisper not called
                 else:
                     rec |= transcript_fields(folder / d["file"], d.get("lang"), a.prompt)
                     if prompt_leaked(rec):

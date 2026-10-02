@@ -5,7 +5,8 @@ Prabowo sendiri yang berbicara, lalu mengekspor hasilnya ke Excel.
 
 ```
 fetch_videos.py   OpenSearch (read-only) -> unduh video -> manifest.jsonl
-transcribe.py     video -> Speaches (Whisper) -> transcripts.jsonl
+prep/vad.py       video -> Silero VAD -> vad.jsonl                           (di Docker)
+transcribe.py     video -> Speaches (Whisper) -> transcripts.jsonl          (lewati video tanpa ucapan)
 speaker_id.py     video + segmen -> voiceprint ECAPA -> speakers.jsonl   (di Docker)
 export_xlsx.py    semua .jsonl -> Excel (sheet Transkrip + Ringkasan)
 ```
@@ -15,10 +16,11 @@ export_xlsx.py    semua .jsonl -> Excel (sheet Transkrip + Ringkasan)
 | Path | Fungsi |
 |---|---|
 | `fetch_videos.py` | Menjalankan satu `_search` ke OpenSearch, mengunduh `media_url` tiap hasil (fallback yt-dlp), menulis `manifest.jsonl` |
-| `transcribe.py` | Transkripsi lewat Speaches, filter halusinasi Whisper, fallback tanpa prompt bila prompt bocor |
+| `transcribe.py` | Transkripsi lewat Speaches, gerbang Silero VAD, filter halusinasi Whisper, fallback tanpa prompt bila prompt bocor |
 | `export_xlsx.py` | Ekspor ke Excel, termasuk kolom voiceprint bila ada `speakers.jsonl` |
 | `export_csv.py` | Ekspor CSV lama (tanpa kolom voiceprint) |
 | `queries/` | Body query OpenSearch (`query_prabowo.json`, `query_prabowo_mbg.json`) |
+| `prep/` | Dockerfile `audio-prep:local` + `vad.py` (gerbang Silero VAD) + `prep.py` (eksperimen Demucs) |
 | `speaker-id/` | Dockerfile + `speaker_id.py` (enroll / test / score) |
 | `speaker-id/refs/` | Voiceprint referensi (`prabowo.npy`) dan metadatanya |
 | `speaches/docker-compose.yml` | Service STT Speaches di port 8010 |
@@ -39,7 +41,11 @@ export_xlsx.py    semua .jsonl -> Excel (sheet Transkrip + Ringkasan)
    docker build -t speaker-id:local D:\audio-converter\speaker-id
    ```
    Model ECAPA diunduh sekali ke volume `spk-cache` saat pertama dipakai.
-5. Kredensial OpenSearch: file netrc di luar folder ini, isinya
+5. Image audio-prep (Silero VAD, dibangun di atas `speaker-id:local`; sudah ada sebagai `audio-prep:local`):
+   ```powershell
+   docker build -t audio-prep:local D:\audio-converter\prep
+   ```
+6. Kredensial OpenSearch: file netrc di luar folder ini, isinya
    `machine osearch.prod.int.edwi.co.id login <user> password <password>`.
    Alternatif: env `OS_USER` dan `OS_PASS`. Jangan simpan kredensial di folder ini.
 
@@ -56,13 +62,16 @@ $env:PYTHONIOENCODING = "utf-8"
 # 1. Ambil dan unduh video (ubah tanggal/kata kunci di file query dulu)
 python fetch_videos.py --query queries\query_prabowo_mbg.json --size 30 --out $B --netrc-file C:\path\ke\os.netrc
 
-# 2. Transkripsi (sekitar 2x real-time di CPU)
+# 2. Silero VAD: tulis vad.jsonl di folder batch (sekitar 20 detik untuk 37 video)
+docker run --rm -v "C:\Users\wayan\Downloads:/data" -v "D:\audio-converter\prep:/prep:ro" -v spk-cache:/cache audio-prep:local python /prep/vad.py --src /data/socmed-prabowo-mbg-20260929
+
+# 3. Transkripsi (sekitar 2x real-time di CPU); video dengan ucapan Silero < 1 detik tidak dikirim ke Whisper
 python transcribe.py --dir $B
 
-# 3. Cek suara Prabowo
+# 4. Cek suara Prabowo
 docker run --rm -e PYTHONIOENCODING=utf-8 -v "C:\Users\wayan\Downloads:/data" -v "D:\audio-converter\speaker-id:/app" -v spk-cache:/cache speaker-id:local python speaker_id.py score --name prabowo --dir /data/socmed-prabowo-mbg-20260929
 
-# 4. Ekspor Excel
+# 5. Ekspor Excel
 python export_xlsx.py --dir $B --out "C:\Users\wayan\Downloads\transkrip-prabowo-mbg-20260929.xlsx" --netrc-file C:\path\ke\os.netrc --ref-source "PRESIDEN PRABOWO Kadang-kadang Saya Kalau Bicara di Audiens Suka Dipelintir.mp3"
 ```
 
@@ -75,6 +84,7 @@ Opsi yang sering dipakai:
 - `transcribe.py --reclassify`: hitung ulang filter halusinasi dan status dari segmen tersimpan,
   tanpa transkripsi ulang (membuat `transcripts.jsonl.bak` dulu).
 - `transcribe.py --prompt ""`: transkripsi tanpa prompt ejaan.
+- `transcribe.py --no-vad-gate`: abaikan `vad.jsonl`, semua video beraudio dikirim ke Whisper.
 - `export_xlsx.py --note "<_id>=teks"` dan `--summary-note "teks"`: catatan manual di Excel.
 
 ## Menambah voiceprint tokoh lain
@@ -94,8 +104,10 @@ Eksperimen: `--model ecapa2` (enroll / test / score) memakai ECAPA2 (`Jenthe/ECA
 Di folder batch:
 
 - `manifest.jsonl`: hasil query dan status unduhan per `_id`.
+- `vad.jsonl`: hasil Silero VAD per video (`vad_speech_seconds`, `vad_spans`).
 - `transcripts.jsonl`: transkrip, segmen bertimestamp, dan status.
   Status: `done` / `no_speech` / `suspect_hallucination` / `no_audio` / `failed`.
+  `no_speech` dengan `vad_gate: true` berarti Whisper tidak dipanggil.
 - `speakers.jsonl`: per video, berisi `verdict` ya/tidak, durasi suara Prabowo, suara yang
   terdeteksi, dan segmen yang diatribusikan.
 
@@ -113,6 +125,14 @@ Di folder batch:
 - **Prompt ejaan** (MBG, BGN, SPPG) memperbaiki ejaan istilah, tetapi bisa bocor ke hasil.
   Bila ada pengulangan atau salinan prompt, `transcribe.py` otomatis mentranskrip ulang video
   itu tanpa prompt (`prompt_fallback: true`).
+- **Gerbang Silero VAD.** Video dengan ucapan Silero < 1 detik langsung `no_speech`. Audio yang
+  dikirim ke Whisper tidak diubah (tanpa Demucs, tanpa pembisuan).
+  - Batch 20260929: 10 dari 33 video beraudio dilewati (ucapan 0,0–0,8 detik). Tanpa gerbang,
+    6 di antaranya `no_speech` dan 4 `suspect_hallucination` berisi "Terima kasih.". 23 video
+    lain teksnya identik. Video terendah berikutnya punya 2,0 detik ucapan.
+  - Varian lain yang diuji (Demucs, Demucs + Silero, Silero membisukan audio) mengubah teks
+    dan bisa meloloskan halusinasi baru, jadi tidak dipakai. Lihat `prep/prep.py`.
+  - Tanpa `vad.jsonl` (langkah 2 dilewati), `transcribe.py` berjalan seperti sebelumnya.
 - **Jumlah suara adalah perkiraan.** Jendela 3 detik dikelompokkan dengan average linkage:
   dua kelompok jadi satu suara bila rata-rata cosine semua pasangan jendelanya >= 0,35.
   - Uji di klip berlabel: pasangan jendela dari orang berbeda 0,15–0,32, potongan suara
