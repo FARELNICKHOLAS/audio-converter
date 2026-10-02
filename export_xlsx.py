@@ -7,7 +7,10 @@ Sheet "Ringkasan": status counts, speed and speaker roles, as formulas over "Tra
 
 Full captions are re-read from OpenSearch (_mget, read-only) when --netrc-file is
 given; otherwise the 300-char caption from the manifest is used. Voiceprint columns
-are added when the batch folder has a speakers.jsonl (from speaker-id/speaker_id.py).
+are added when the batch folder has a speakers.jsonl (from speaker-id/speaker_id.py),
+including the transcript split into speaker turns (Pembicara 1, 2, ...).
+A translation column is added when the batch folder has a translations.json
+({_id: text}); those translations are written by hand, not by the pipeline.
 
 Usage:
   python export_xlsx.py --dir <batch folder> --out <file.xlsx> [--netrc-file <path>]
@@ -50,9 +53,11 @@ COLS = [("no", "No", 5, False), ("status", "Status", 20, False), ("catatan", "Ca
         ("suara_skor", "Skor kemiripan suara tertinggi", 11, False),
         ("n_suara", "Jumlah suara berbeda (perkiraan)", 11, False), ("peran", "Peran Prabowo", 14, False),
         ("caption", "Caption", 55, True), ("transkrip", "Transkrip", 90, True),
+        ("per_pembicara", "Transkrip per pembicara (otomatis, voiceprint)", 90, True),
+        ("terjemahan", "Terjemahan transkrip (Indonesia, manual)", 60, True),
         ("kutipan", "Kutipan suara Prabowo (detik ke-)", 60, True),
         ("link", "Link", 22, False), ("file", "File", 30, False), ("_id", "_id", 22, False), ("_index", "_index", 24, False)]
-SPEAKER_KEYS = {"suara", "suara_detik", "suara_porsi", "suara_skor", "n_suara", "peran", "kutipan"}
+SPEAKER_KEYS = {"suara", "suara_detik", "suara_porsi", "suara_skor", "n_suara", "peran", "per_pembicara", "kutipan"}
 FONT = "Arial"
 
 
@@ -100,8 +105,36 @@ def mmss(t):
     return f"{int(t // 60)}:{int(t % 60):02d}"
 
 
-def build(recs, files, captions, manual_notes, speakers, ref_source, summary_notes, out):
-    cols = [c for c in COLS if speakers or c[0] not in SPEAKER_KEYS]
+def speaker_turns(r, sp):
+    """Transcript split into speaker turns, from the per-segment voices in speakers.jsonl.
+
+    Voices with at least 3 s of speech are numbered in order of first appearance, so the numbers
+    match n_voices. A segment with no voice of its own that speaker_id.py matched to one of them
+    gets that number with '*'. Other short voices and segments are 'Pembicara ?'."""
+    if not sp:
+        return ""
+    seg_of = {(s["start"], s["end"], s["text"]): s for s in sp.get("segments", [])}
+    voices = {v["voice"]: v for v in sp.get("voices", [])}
+    names, turns = {}, []
+    for s in r.get("segments", []):
+        if "hallucination" in s:
+            continue  # left out of the transcript too
+        g = seg_of.get((round(s["start"], 1), round(s["end"], 1), s["text"]), {})
+        v, star = voices.get(g.get("voice")), ""
+        if not (v and v["seconds"] >= 3) and "match_voice" in g:
+            v, star = voices[g["match_voice"]], "*"
+        name = names.setdefault(v["voice"], f"Pembicara {len(names) + 1}") + star if v and v["seconds"] >= 3 else "Pembicara ?"
+        if v and v["label"] == "target":
+            name += " (mirip Prabowo)"
+        if turns and turns[-1][1] == name:
+            turns[-1][2].append(s["text"])
+        else:
+            turns.append([s["start"], name, [s["text"]]])
+    return "\n".join(f"[{mmss(t)}] {name}: {' '.join(texts)}" for t, name, texts in turns)
+
+
+def build(recs, files, captions, manual_notes, speakers, translations, ref_source, summary_notes, out):
+    cols = [c for c in COLS if (speakers or c[0] not in SPEAKER_KEYS) and (translations or c[0] != "terjemahan")]
     L = {key: get_column_letter(i) for i, (key, *_) in enumerate(cols, 1)}
     idx = {key: i for i, (key, *_) in enumerate(cols, 1)}
     wb = Workbook()
@@ -140,6 +173,8 @@ def build(recs, files, captions, manual_notes, speakers, ref_source, summary_not
                       f'IF(ISNUMBER(SEARCH("prabowo",{L["caption"]}{i})),"hanya_caption","tidak_disebut")))')
                      if speakers else None,
             "caption": captions.get(r["_id"], r.get("content") or ""), "transkrip": r.get("transcript") or "",
+            "per_pembicara": speaker_turns(r, sp),
+            "terjemahan": translations.get(r["_id"], ""),
             "kutipan": "\n".join(f"[{mmss(s['start'])}] {s['text']}" for s in (sp or {}).get("segments", [])
                                  if s["label"] == "target"),
             "link": r.get("link"), "file": files.get(r["_id"]), "_id": r["_id"], "_index": r.get("_index"),
@@ -215,10 +250,17 @@ def build(recs, files, captions, manual_notes, speakers, ref_source, summary_not
         row[0] += 1
         put("Metode voiceprint")
         put("Model", "ECAPA-TDNN", "speechbrain/spkrec-ecapa-voxceleb; jendela 3 detik (hop 1,5 detik) di dalam segmen Whisper")
-        put("Cara kerja", None, "Jendela dikelompokkan per suara dalam tiap video; rata-rata embedding tiap suara dibandingkan dengan referensi (cosine)")
+        put("Cara kerja", None, "Jendela dikelompokkan per suara dalam tiap video (average linkage: dua kelompok jadi satu suara bila rata-rata cosine antar-jendela >= 0,35); rata-rata embedding tiap suara dibandingkan dengan referensi (cosine)")
         put("Referensi suara", None, ref_source)
         put("Ambang (cosine suara vs referensi)", th, "Satu ambang tanpa zona abu-abu: di atas = Prabowo, di bawah = bukan")
         put("Minimal durasi untuk 'ya' (detik)", 3, "Total durasi segmen dari suara yang lolos ambang 'ya'")
+        put("Transkrip per pembicara", None,
+            "Otomatis dari pengelompokan suara. Nomor pembicara berlaku per video, urut kemunculan; nomor sama di video "
+            "lain bukan orang yang sama. 'Pembicara ?' = suara < 3 detik (tidak dihitung di jumlah suara) atau segmen "
+            "terlalu pendek untuk dinilai. Satu segmen Whisper hanya dapat satu pembicara, jadi selaan di tengah "
+            "segmen ikut ke pembicara segmen itu. Tanda * = segmen pendek yang suaranya sendiri tidak cukup, lalu "
+            "dicocokkan ke pembicara utama terdekat di video itu (cosine >= 0,45 dan unggul >= 0,10 dari pembicara "
+            "kedua); tidak dihitung di durasi, jumlah suara, atau kutipan Prabowo.")
         for note in summary_notes:
             put("Catatan", None, note)
     wb.move_sheet("Ringkasan", offset=-1)
@@ -248,8 +290,10 @@ def main():
     if a.netrc_file and missing:
         captions |= full_captions(missing, a.netrc_file)
         cache.write_text(json.dumps(captions, ensure_ascii=False, indent=1), encoding="utf-8")
+    tr_file = folder / "translations.json"
+    translations = json.loads(tr_file.read_text(encoding="utf-8")) if tr_file.exists() else {}
     manual = dict(n.split("=", 1) for n in a.note)
-    build(recs, files, captions, manual, speakers, a.ref_source, a.summary_note, a.out)
+    build(recs, files, captions, manual, speakers, translations, a.ref_source, a.summary_note, a.out)
     print(f"{len(recs)} rows -> {a.out} (full captions: {len(captions)}, speaker rows: {len(speakers)})")
 
 

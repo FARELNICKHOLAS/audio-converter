@@ -5,7 +5,7 @@ Speaches, and writes transcripts.jsonl (one line per _id) in the same folder.
 Already-transcribed _ids are skipped, so it is safe to re-run.
 
 Segments that look like Whisper hallucinations (stock phrases, repetition loops,
-copies of the prompt) are kept in "segments" with a "hallucination" reason but are
+copies of the prompt, timestamps past the end of the audio) are kept in "segments" with a "hallucination" reason but are
 left out of "transcript"; the unfiltered text is kept in "transcript_raw".
 
 The spelling prompt fixes words like "MBG" (without it Whisper writes "MBT", "bergiji"),
@@ -51,12 +51,16 @@ def has_audio_track(path):
     return re.search(rb"hdlr.{8}soun", path.read_bytes(), re.DOTALL) is not None
 
 
-def hallucination_reason(seg):
-    """Why a segment looks like a Whisper hallucination rather than speech, or None."""
+def hallucination_reason(seg, duration=None):
+    """Why a segment looks like a Whisper hallucination rather than speech, or None.
+
+    duration is the audio length in seconds; segments starting at or after it have no audio under them."""
     text = seg["text"].lower()
     words = re.findall(r"\w+", text)
     if not words:
         return "kosong"
+    if duration and seg["start"] >= duration:
+        return "di_luar_audio"  # e.g. a phrase looped for 11 s past the end of a 59.4 s clip
     if (text.strip(" .!?") in {h.strip(" .!") for h in HALLUCINATIONS}
             or re.fullmatch(r"(pembicara|speaker) \d+", text.strip(" .!?"))):
         return "frasa_umum"  # stock phrase, or a subtitle-style speaker label over music
@@ -71,7 +75,7 @@ def clean(rec):
     """Flag hallucinated segments and rebuild transcript from the rest."""
     for s in rec["segments"]:
         s.pop("hallucination", None)
-        if reason := hallucination_reason(s):
+        if reason := hallucination_reason(s, rec.get("transcript_duration")):
             s["hallucination"] = reason
     rec.setdefault("transcript_raw", rec.get("transcript", ""))
     rec["transcript"] = " ".join(s["text"] for s in rec["segments"] if "hallucination" not in s).strip()

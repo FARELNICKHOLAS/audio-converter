@@ -1,3 +1,4 @@
 requests
 openpyxl
 yt-dlp  # fallback downloader in fetch_videos.py, used when media_url fails
+curl_cffi>=0.11  # lets yt-dlp impersonate Chrome; TikTok blocks it otherwise

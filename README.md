@@ -87,6 +87,8 @@ docker run --rm -v "C:\Users\wayan\Downloads:/data" -v "D:\audio-converter\speak
 
 Cek klip lain dengan `speaker_id.py test --audio /data/klip2.mp4 --name nama_tokoh`.
 
+Eksperimen: `--model ecapa2` (enroll / test / score) memakai ECAPA2 (`Jenthe/ECAPA2`, lisensi CC-BY-NC-4.0, hanya non-komersial). Voiceprint disimpan terpisah di `refs/<nama>_ecapa2.npy`. Ambang sama dengan ECAPA tetapi belum dikalibrasi untuk ECAPA2. Di CPU sekitar 2,5 detik per jendela 3 detik (ECAPA 0,08 detik).
+
 ## Hasil per batch
 
 Di folder batch:
@@ -111,6 +113,23 @@ Di folder batch:
 - **Prompt ejaan** (MBG, BGN, SPPG) memperbaiki ejaan istilah, tetapi bisa bocor ke hasil.
   Bila ada pengulangan atau salinan prompt, `transcribe.py` otomatis mentranskrip ulang video
   itu tanpa prompt (`prompt_fallback: true`).
-- **Jumlah suara adalah perkiraan.** Suara yang bicara kurang dari 3 detik tidak dihitung.
-  Dialog dengan giliran bicara pendek bisa tercatat 0 suara; kolom Catatan di Excel
-  menandainya.
+- **Jumlah suara adalah perkiraan.** Jendela 3 detik dikelompokkan dengan average linkage:
+  dua kelompok jadi satu suara bila rata-rata cosine semua pasangan jendelanya >= 0,35.
+  - Uji di klip berlabel: pasangan jendela dari orang berbeda 0,15–0,32, potongan suara
+    Prabowo di video berisik 0,34–0,39. Ambang 0,40 sudah memecah suara Prabowo.
+  - Dulu dipakai cosine ke centroid kelompok. Centroid dua suara campuran tetap dekat ke
+    keduanya (0,67, padahal antar-pasangan 0,25), jadi orang kedua ikut tergabung.
+  - Masih bisa kurang: dua suara yang sangat mirip tetap tergabung, dan satu segmen Whisper
+    berisi dua orang hanya mendapat satu suara.
+  - Suara yang bicara kurang dari 3 detik tidak dihitung. Kolom Catatan di Excel menandai
+    video yang sebagian besar ucapannya berupa giliran pendek.
+- **Selaan pendek dicocokkan ke pembicara utama.** Segmen < 1 detik, atau dari suara < 3 detik,
+  dibandingkan utuh dengan rata-rata suara tiap pembicara utama (>= 3 detik) di video itu.
+  Segmen diberi `match_voice` bila cosine >= 0,45 dan unggul >= 0,10 dari pembicara kedua.
+  Di Excel tampil sebagai `Pembicara N*`.
+  - Simulasi dengan potongan 0,5 / 1,0 / 1,5 detik dari pembicara yang sudah diketahui:
+    yang dicocokkan 31% / 69% / 83%, dan semuanya ke pembicara yang benar. Suara dari video
+    lain diterima 0% / 3% / 4%. "Benar" di sini artinya sama dengan label pipeline sendiri,
+    bukan label manusia.
+  - `voice`, `label`, durasi, jumlah suara, dan kutipan Prabowo tidak berubah: segmen yang
+    dicocokkan tidak pernah dihitung sebagai suara Prabowo.
